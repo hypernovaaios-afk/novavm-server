@@ -1,11 +1,14 @@
 {
   "name": "novavm-server",
   "version": "1.0.0",
+  "description": "Document generation server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "express": "^4.19.2"
+    "pdf-lib": "^1.17.1"
   }
 }
