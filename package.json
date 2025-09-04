@@ -1,14 +1,21 @@
 {
   "name": "novavm-server",
   "version": "1.0.0",
-  "description": "Document generation server",
+  "description": "Document generation server with real form downloading",
   "main": "server.js",
+  "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "pdf-lib": "^1.17.1"
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2",
+    "pdf-lib": "^1.17.1",
+    "fs": "^0.0.1-security",
+    "path": "^0.12.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
