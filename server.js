@@ -1,4 +1,4 @@
-// server.js - Fixed version that handles XFA forms and download failures
+// server.js - Updated with Health Check Endpoints
 import express from 'express';
 import fetch from 'node-fetch';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
@@ -12,10 +12,43 @@ app.use((req, res, next) => {
   const expectedKey = process.env.NOVAVM_ADMIN_KEY;
   
   if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== expectedKey) {
+    // Allow health checks to pass without auth
+    if (req.path === '/health' || req.path === '/agent/health') {
+        return next();
+    }
     return res.status(401).json({ ok: false, error: 'Unauthorized' });
   }
   next();
 });
+
+// ===================================================================
+// == START: NEW HEALTH CHECK ENDPOINTS TO ADD
+// ===================================================================
+
+// Main server health check
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: "novavm-server",
+    status: "live",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Agent health check
+app.get('/agent/health', (req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: "document_agent",
+    status: "live",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ===================================================================
+// == END: NEW HEALTH CHECK ENDPOINTS
+// ===================================================================
+
 
 // Create a properly filled PDF by overlaying text instead of trying to fill form fields
 async function createFilledPDF(templateUrl, businessData, formType) {
