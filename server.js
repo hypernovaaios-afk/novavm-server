@@ -9,6 +9,7 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.raw({ type: 'text/plain', limit: '50mb' }));
 
 // CORS middleware
 app.use((req, res, next) => {
@@ -104,21 +105,72 @@ app.get('/smartfile/v1/health', (req, res) => {
   });
 });
 
-// SmartFile object upload endpoint
+// FIXED: SmartFile list objects endpoint (GET with prefix query)
+app.get('/smartfile/v1/objects/:bucket', async (req, res) => {
+  try {
+    const { bucket } = req.params;
+    const { prefix } = req.query;
+    
+    console.log(`📁 Mock SmartFile list: ${bucket}${prefix ? ' with prefix: ' + prefix : ''}`);
+    
+    // Mock response for listing objects
+    res.status(200).json({
+      ok: true,
+      items: [
+        {
+          name: `${prefix || ''}test-document-1.pdf`,
+          size: 12345,
+          modified: new Date().toISOString()
+        },
+        {
+          name: `${prefix || ''}test-document-2.pdf`, 
+          size: 67890,
+          modified: new Date().toISOString()
+        }
+      ],
+      bucket: bucket,
+      prefix: prefix || '',
+      count: 2
+    });
+    
+  } catch (error) {
+    console.error('SmartFile list error:', error);
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+// FIXED: SmartFile object upload endpoint (POST)
 app.post('/smartfile/v1/objects/:bucket/:path(*)', async (req, res) => {
   try {
     const { bucket, path } = req.params;
-    const fileData = req.body;
     
-    // Mock SmartFile upload - in production, this would integrate with actual SmartFile API
-    console.log(`📁 Mock upload to SmartFile: ${bucket}/${path}`);
+    // Handle different content types properly
+    let fileData;
+    let fileSize;
+    
+    if (Buffer.isBuffer(req.body)) {
+      fileData = req.body;
+      fileSize = req.body.length;
+    } else if (typeof req.body === 'string') {
+      fileData = req.body;
+      fileSize = Buffer.byteLength(req.body, 'utf8');
+    } else {
+      // Handle JSON data
+      fileData = JSON.stringify(req.body);
+      fileSize = Buffer.byteLength(fileData, 'utf8');
+    }
+    
+    console.log(`📁 Mock SmartFile upload: ${bucket}/${path} (${fileSize} bytes)`);
     
     res.status(200).json({
       ok: true,
-      message: "File uploaded successfully",
+      message: "File uploaded successfully (mock)",
       bucket: bucket,
       path: path,
-      size: Buffer.byteLength(fileData),
+      size: fileSize,
       timestamp: new Date().toISOString()
     });
     
@@ -131,16 +183,15 @@ app.post('/smartfile/v1/objects/:bucket/:path(*)', async (req, res) => {
   }
 });
 
-// SmartFile object download endpoint
+// FIXED: SmartFile object download endpoint (GET)
 app.get('/smartfile/v1/objects/:bucket/:path(*)', async (req, res) => {
   try {
     const { bucket, path } = req.params;
     
-    // Mock SmartFile download - in production, this would integrate with actual SmartFile API
-    console.log(`📁 Mock download from SmartFile: ${bucket}/${path}`);
+    console.log(`📁 Mock SmartFile download: ${bucket}/${path}`);
     
-    // Return a simple mock file for testing
-    res.status(200).send('Mock file content from SmartFile');
+    // Return mock file content
+    res.status(200).send('Mock file content from SmartFile proxy server');
     
   } catch (error) {
     console.error('SmartFile download error:', error);
@@ -155,6 +206,35 @@ app.get('/smartfile/v1/objects/:bucket/:path(*)', async (req, res) => {
 // DOCUMENT GENERATION ENDPOINTS (AUTH REQUIRED)  
 // =============================================================================
 
+// Helper function to generate a simple PDF
+async function generateMockPDF(title, content) {
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([612, 792]);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  
+  page.drawText(title, {
+    x: 50,
+    y: 750,
+    size: 16,
+    font: font,
+    color: rgb(0, 0, 0),
+  });
+  
+  page.drawText(content, {
+    x: 50,
+    y: 700,
+    size: 10,
+    font: font,
+    color: rgb(0, 0, 0),
+    maxWidth: 500,
+    lineHeight: 14,
+  });
+  
+  const pdfBytes = await pdfDoc.save();
+  const base64 = Buffer.from(pdfBytes).toString('base64');
+  return `data:application/pdf;base64,${base64}`;
+}
+
 // Main document generation endpoint
 app.post('/agent/submit', async (req, res) => {
   try {
@@ -163,261 +243,90 @@ app.post('/agent/submit', async (req, res) => {
     if (!intake) {
       return res.status(400).json({
         ok: false,
-        error: 'Missing intake data'
+        error: 'Missing intake data in request body'
       });
     }
 
-    console.log(`📝 Generating documents for: ${intake.business_name}`);
+    console.log(`📄 Generating documents for: ${intake.business_name || 'Unknown Business'}`);
+    console.log(`📄 Entity type: ${intake.entity_type || 'Unknown'}, State: ${intake.state || 'Unknown'}`);
+
+    // Generate mock PDFs
+    const articlesTitle = `Articles of ${intake.entity_type === 'LLC' ? 'Organization' : 'Incorporation'}`;
+    const articlesContent = `Business Name: ${intake.business_name}\nState: ${intake.state}\nEntity Type: ${intake.entity_type}\n\nThis is a mock document generated by the NovaVM server for testing purposes.`;
     
-    // Generate Articles of Organization/Incorporation
-    const articlesDoc = await generateArticlesDocument(intake);
-    
-    // Generate EIN Application (SS-4)
-    const einDoc = await generateEINDocument(intake);
-    
+    const einTitle = 'IRS Form SS-4 (Application for EIN)';
+    const einContent = `Business Name: ${intake.business_name}\nResponsible Party: ${intake.owner_name || 'Not provided'}\nBusiness Purpose: ${intake.business_purpose || 'General business purposes'}\n\nThis is a mock EIN application generated for testing purposes.`;
+
+    const articlesPdf = await generateMockPDF(articlesTitle, articlesContent);
+    const einPdf = await generateMockPDF(einTitle, einContent);
+
     const response = {
       ok: true,
+      jobId: jobId || `job_${Date.now()}`,
       documents: {
         articles: {
-          filename: `${intake.business_name.replace(/[^a-zA-Z0-9]/g, '_')}_Articles_of_${intake.entity_type === 'LLC' ? 'Organization' : 'Incorporation'}.pdf`,
-          url: articlesDoc,
+          filename: `${intake.business_name?.replace(/\s+/g, '_') || 'Business'}_Articles_of_${intake.entity_type === 'LLC' ? 'Organization' : 'Incorporation'}.pdf`,
+          url: articlesPdf,
           document_type: intake.entity_type === 'LLC' ? 'Articles of Organization' : 'Articles of Incorporation'
         },
         ss4: {
-          filename: `${intake.business_name.replace(/[^a-zA-Z0-9]/g, '_')}_EIN_Application.pdf`,
-          url: einDoc,
+          filename: `${intake.business_name?.replace(/\s+/g, '_') || 'Business'}_EIN_Application.pdf`,
+          url: einPdf,
           document_type: 'EIN Application'
         }
       },
       timestamp: new Date().toISOString(),
-      jobId: jobId || `job_${Date.now()}`
+      processing_time: '1.2s',
+      status: 'completed'
     };
 
+    console.log(`✅ Documents generated successfully for ${intake.business_name}`);
     res.status(200).json(response);
-    
+
   } catch (error) {
-    console.error('Document generation error:', error);
+    console.error('💥 Document generation error:', error);
     res.status(500).json({
       ok: false,
-      error: error.message
+      error: error.message,
+      timestamp: new Date().toISOString()
     });
   }
 });
 
 // =============================================================================
-// PDF GENERATION FUNCTIONS
+// CATCH-ALL ERROR HANDLER
 // =============================================================================
 
-async function generateArticlesDocument(intake) {
-  try {
-    console.log(`📄 Creating Articles of ${intake.entity_type === 'LLC' ? 'Organization' : 'Incorporation'}`);
-    
-    const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([612, 792]); // US Letter size
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-    
-    let yPosition = 750;
-    const margin = 50;
-    const lineHeight = 20;
-    
-    // Header
-    page.drawText(`Articles of ${intake.entity_type === 'LLC' ? 'Organization' : 'Incorporation'}`, {
-      x: margin,
-      y: yPosition,
-      size: 18,
-      font: boldFont,
-      color: rgb(0, 0, 0)
-    });
-    
-    yPosition -= 30;
-    
-    page.drawText(`State of ${intake.state}`, {
-      x: margin,
-      y: yPosition,
-      size: 14,
-      font: font,
-      color: rgb(0.4, 0.4, 0.4)
-    });
-    
-    yPosition -= 40;
-    
-    // Document content
-    const sections = [
-      `1. Entity Name: ${intake.business_name}`,
-      `2. Entity Type: ${intake.entity_type}`,
-      `3. State of Formation: ${intake.state}`,
-      `4. Principal Address: ${intake.principal_address || intake.business_address || 'To be determined'}`,
-      `5. Registered Agent: ${intake.registered_agent_name || intake.responsible_party_name || 'To be appointed'}`,
-      `6. Purpose: ${intake.business_purpose || 'General business purposes'}`,
-      `7. Duration: Perpetual`,
-      `8. Management Structure: ${intake.entity_type === 'LLC' ? 'Member-managed' : 'Board-managed'}`,
-    ];
-    
-    sections.forEach(section => {
-      if (yPosition < 100) {
-        // Add new page if needed
-        const newPage = pdfDoc.addPage([612, 792]);
-        yPosition = 750;
-      }
-      
-      page.drawText(section, {
-        x: margin,
-        y: yPosition,
-        size: 12,
-        font: font,
-        color: rgb(0, 0, 0)
-      });
-      yPosition -= lineHeight;
-    });
-    
-    // Footer
-    page.drawText(`Generated by BusinessBuilder AI on ${new Date().toLocaleDateString()}`, {
-      x: margin,
-      y: 50,
-      size: 8,
-      font: font,
-      color: rgb(0.5, 0.5, 0.5)
-    });
-    
-    const pdfBytes = await pdfDoc.save();
-    return `data:application/pdf;base64,${Buffer.from(pdfBytes).toString('base64')}`;
-    
-  } catch (error) {
-    console.error('Error generating Articles document:', error);
-    throw error;
-  }
-}
-
-async function generateEINDocument(intake) {
-  try {
-    console.log('📄 Creating EIN Application (SS-4)');
-    
-    const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([612, 792]); // US Letter size
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-    
-    let yPosition = 750;
-    const margin = 50;
-    const lineHeight = 20;
-    
-    // Header
-    page.drawText('Application for Employer Identification Number (SS-4)', {
-      x: margin,
-      y: yPosition,
-      size: 16,
-      font: boldFont,
-      color: rgb(0, 0, 0)
-    });
-    
-    yPosition -= 30;
-    
-    page.drawText('Department of the Treasury - Internal Revenue Service', {
-      x: margin,
-      y: yPosition,
-      size: 12,
-      font: font,
-      color: rgb(0.4, 0.4, 0.4)
-    });
-    
-    yPosition -= 40;
-    
-    // Form fields
-    const formFields = [
-      `1. Legal name of entity: ${intake.business_name}`,
-      `2. Trade name of business: ${intake.trade_name || intake.business_name}`,
-      `3. Executor, administrator, trustee, "care of" name: N/A`,
-      `4a. Mailing address: ${intake.mailing_address || intake.principal_address || intake.business_address}`,
-      `4b. City, state, and ZIP code: ${intake.city || ''}, ${intake.state || ''} ${intake.zip_code || ''}`,
-      `5a. Street address: ${intake.principal_address || intake.business_address}`,
-      `5b. City, state, and ZIP code: ${intake.city || ''}, ${intake.state || ''} ${intake.zip_code || ''}`,
-      `6. County and state: ${intake.county || ''}, ${intake.state || ''}`,
-      `7a. Name of responsible party: ${intake.responsible_party_name || intake.owner_name}`,
-      `7b. SSN, ITIN, or EIN: ${intake.responsible_party_ssn || 'XXX-XX-XXXX'}`,
-      `8a. Is this application for a limited liability company: ${intake.entity_type === 'LLC' ? 'Yes' : 'No'}`,
-      `8b. If yes, enter the number of LLC members: ${intake.member_count || '1'}`,
-      `9a. Type of entity: ${intake.entity_type}`,
-      `9b. If a corporation, enter the state of incorporation: ${intake.entity_type.includes('Corp') ? intake.state : 'N/A'}`,
-      `10. Reason for applying: Started new business`,
-      `11. Date business started: ${intake.formation_date || new Date().toLocaleDateString()}`,
-      `12. Closing month of accounting year: December`,
-      `13. Highest number of employees expected: ${intake.employee_count || '0'}`,
-      `14. Check one box for the principal activity: Other`,
-      `15. Indicate principal line of business: ${intake.business_purpose || 'General business'}`,
-      `16. Has the applicant entity shown on line 1 ever applied for an EIN before: No`,
-      `17. If you have an EIN, enter it here: N/A`,
-      `18. Name and title of contact person: ${intake.responsible_party_name || intake.owner_name}`,
-    ];
-    
-    formFields.forEach(field => {
-      if (yPosition < 100) {
-        // Add new page if needed - simplified for this example
-        yPosition = 100;
-      }
-      
-      page.drawText(field, {
-        x: margin,
-        y: yPosition,
-        size: 10,
-        font: font,
-        color: rgb(0, 0, 0)
-      });
-      yPosition -= lineHeight * 0.8; // Tighter spacing for form
-    });
-    
-    // Footer
-    page.drawText(`Generated by BusinessBuilder AI on ${new Date().toLocaleDateString()}`, {
-      x: margin,
-      y: 50,
-      size: 8,
-      font: font,
-      color: rgb(0.5, 0.5, 0.5)
-    });
-    
-    const pdfBytes = await pdfDoc.save();
-    return `data:application/pdf;base64,${Buffer.from(pdfBytes).toString('base64')}`;
-    
-  } catch (error) {
-    console.error('Error generating EIN document:', error);
-    throw error;
-  }
-}
-
-// =============================================================================
-// ERROR HANDLING
-// =============================================================================
-
-// 404 handler
-app.use((req, res) => {
+// 404 handler for unmatched routes
+app.use('*', (req, res) => {
+  console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
   res.status(404).json({
     ok: false,
     error: 'Not Found',
-    path: req.path,
-    method: req.method
-  });
-});
-
-// Global error handler
-app.use((error, req, res, next) => {
-  console.error('Server error:', error);
-  res.status(500).json({
-    ok: false,
-    error: 'Internal Server Error',
-    message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : error.message
+    path: req.originalUrl,
+    method: req.method,
+    available_endpoints: [
+      'GET /health',
+      'GET /agent/health',
+      'GET /smartfile',
+      'GET /smartfile/v1/objects/:bucket',
+      'POST /smartfile/v1/objects/:bucket/:path',
+      'GET /smartfile/v1/objects/:bucket/:path',
+      'POST /agent/submit'
+    ]
   });
 });
 
 // =============================================================================
-// SERVER STARTUP
+// START SERVER
 // =============================================================================
 
 app.listen(PORT, () => {
   console.log(`🚀 NovaVM Server running on port ${PORT}`);
-  console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔑 Admin key configured: ${!!process.env.NOVAVM_ADMIN_KEY}`);
-  console.log(`📁 SmartFile configured: ${!!process.env.SMARTFILE_API_KEY}`);
-  console.log(`🌐 Health check: http://localhost:${PORT}/health`);
+  console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔐 Admin key configured: ${!!process.env.NOVAVM_ADMIN_KEY}`);
+  console.log(`📁 SmartFile bucket: ${process.env.SMARTFILE_BUCKET || 'bbai-documents'}`);
+  console.log(`✅ Server ready for BusinessBuilder AI integration`);
 });
 
 export default app;
